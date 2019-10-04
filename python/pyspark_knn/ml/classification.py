@@ -1,4 +1,5 @@
-from pyspark.ml.wrapper import JavaEstimator, JavaModel
+from pyspark.ml.wrapper import JavaEstimator, JavaModel, JavaParams
+from pyspark.ml.util import DefaultParamsWritable, DefaultParamsReadable, JavaMLWriter, JavaMLReader, MLReadable, MLWritable
 from pyspark.ml.param.shared import *
 from pyspark.mllib.common import inherit_doc
 from pyspark import keyword_only
@@ -7,7 +8,7 @@ from pyspark import keyword_only
 @inherit_doc
 class KNNClassifier(JavaEstimator, HasFeaturesCol, HasLabelCol, HasPredictionCol,
                     HasProbabilityCol, HasRawPredictionCol, HasInputCols,
-                    HasThresholds, HasSeed, HasWeightCol):
+                    HasThresholds, HasSeed, HasWeightCol, MLReadable, MLWritable):
     @keyword_only
     def __init__(self, featuresCol="features", labelCol="label", predictionCol="prediction",
                  seed=None, topTreeSize=1000, topTreeLeafSize=10, subTreeLeafSize=30, bufferSize=-1.0,
@@ -54,7 +55,7 @@ class KNNClassifier(JavaEstimator, HasFeaturesCol, HasLabelCol, HasPredictionCol
         return KNNClassificationModel(java_model)
 
 
-class KNNClassificationModel(JavaModel):
+class KNNClassificationModel(JavaModel, DefaultParamsReadable, DefaultParamsWritable, MLReadable, MLWritable):
     """
     Model fitted by KNNClassifier.
     """
@@ -69,3 +70,24 @@ class KNNClassificationModel(JavaModel):
         self.maxNeighbors = Param(self, "maxNeighbors", "maximum distance to find neighbors")
 
         self._transfer_params_from_java()
+
+    @classmethod
+    def _from_java(cls, java_model):
+        """
+        Given Java KNNClassificationModel, create and return Python wrapper. Necessary for persistence.
+        """
+        py_model = cls(java_model)
+        py_model._transfer_params_from_java()
+        #py_model._resetUid(java_model.uid())
+        return py_model
+
+    def _to_java(self):
+        """
+        Transfer instance to a new Java object of same. Necessary for persistence.
+        :return: Java object equivalent to this instance.
+        """
+        _java_obj = JavaParams._new_java_obj("org.apache.spark.ml.classification.KNNClassificationModel", self.uid)
+        _java_obj.setFeaturesCol(self.featuresCol)
+        _java_obj.setLabelCol(self.labelCol)
+        _java_obj.setPredictionCol(self.predictionCol)
+        return _java_obj

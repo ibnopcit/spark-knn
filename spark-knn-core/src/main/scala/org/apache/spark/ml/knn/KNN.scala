@@ -2,6 +2,8 @@ package org.apache.spark.ml.knn
 
 import breeze.linalg.{DenseVector, Vector => BV}
 import breeze.stats._
+
+import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.classification.KNNClassificationModel
 import org.apache.spark.ml.knn.KNN.{KNNPartitioner, RowWithVector, VectorWithNorm}
@@ -18,9 +20,14 @@ import org.apache.spark.sql.{DataFrame, Dataset, Row}
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.random.XORShiftRandom
 import org.apache.spark.{HashPartitioner, Partitioner}
+import org.apache.spark.SparkContext
 import org.apache.log4j
 import org.apache.spark.mllib.knn.KNNUtils
 
+import org.json4s._
+import org.json4s.JsonDSL._
+import org.json4s.jackson.JsonMethods._
+import org.json4s.{DefaultFormats, Formats}
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
 import scala.util.hashing.byteswap64
@@ -124,7 +131,25 @@ private[ml] trait KNNModelParams extends Params with HasFeaturesCol with HasInpu
   private[ml] def transform(dataset: Dataset[_], topTree: Broadcast[Tree], subTrees: RDD[Tree]): RDD[(Long, Array[(Row, Double)])] = {
     transform(dataset.select($(featuresCol)).rdd.map(_.getAs[Vector](0)), topTree, subTrees)
   }
+}
 
+object KNNModelParams {
+  def saveImpl(path: String, instance: KNNModelParams, sc: SparkContext, metametadata: Option[JObject] = None): Unit = {
+    val params = instance.extractParamMap().toSeq
+    val jsonParams = render(
+      params.filter { case ParamPair(p, v) => (p.name != "topTree" && p.name != "subTrees")}
+        .map { case ParamPair(p, v) => p.name -> parse(p.jsonEncode(v)) }
+        .toList
+    )
+
+    DefaultParamsWriter.saveMetadata(instance, path, sc, metametadata, Some(jsonParams))
+  }
+
+  def loadImpl(path: String, sc: SparkContext, expectedClassName: String): 
+    DefaultParamsReader.Metadata = {
+    val metadata = DefaultParamsReader.loadMetadata(path, sc, expectedClassName)
+    metadata
+  }
 }
 
 private[ml] trait KNNParams extends KNNModelParams with HasSeed {

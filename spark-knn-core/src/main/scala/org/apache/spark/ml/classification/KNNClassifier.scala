@@ -1,18 +1,24 @@
 package org.apache.spark.ml.classification
 
+import org.apache.hadoop.fs.{FileSystem, Path}
+
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.knn._
+import org.apache.spark.ml.knn.KNNModelParams
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.param.shared.HasWeightCol
-import org.apache.spark.ml.util.{Identifiable, SchemaUtils}
+import org.apache.spark.ml.util.{DefaultParamsReadable, DefaultParamsWritable, Identifiable, SchemaUtils, MLReadable, MLWritable, MLReader, MLWriter}
 import org.apache.spark.ml.linalg._
 import org.apache.spark.ml.feature.LabeledPoint
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.types.{DoubleType, StructType}
 import org.apache.spark.sql.{DataFrame, Dataset, Row}
 import org.apache.spark.storage.StorageLevel
+import org.apache.spark.SparkContext
 import org.apache.spark.SparkException
 
+import org.json4s.JsonDSL._
+import org.json4s.{DefaultFormats, Formats}
 import scala.collection.mutable.ArrayBuffer
 
 /**
@@ -128,7 +134,8 @@ class KNNClassificationModel private[ml](
                                           val subTrees: RDD[Tree],
                                           val _numClasses: Int
                                         ) extends ProbabilisticClassificationModel[Vector, KNNClassificationModel]
-with KNNModelParams with HasWeightCol with Serializable {
+with KNNModelParams with HasWeightCol with Serializable with MLReadable[KNNClassificationModel] with DefaultParamsReadable[KNNClassificationModel]
+with MLWritable with DefaultParamsWritable {
   require(subTrees.getStorageLevel != StorageLevel.NONE,
     "KNNModel is not designed to work with Trees that have not been cached")
 
@@ -236,4 +243,43 @@ with KNNModelParams with HasWeightCol with Serializable {
   override protected def predictRaw(features: Vector): Vector = {
     throw new SparkException("predictRaw function should not be called directly since kNN prediction is done in distributed fashion. Use transform instead.")
   }
+
+  override def read: MLReader[KNNClassificationModel] = new KNNClassificationModelReader
+
+  override def write: MLWriter = new KNNClassificationModelWriter(this)
+
+  override def load(path: String): KNNClassificationModel = super.load(path)
+
+  /** [[MLWriter]] instance for [[KNNClassificationModel]]. */
+  private[KNNClassificationModel] class KNNClassificationModelWriter(instance: KNNClassificationModel) extends MLWriter {
+    // super[KNNModelParams].validateParams(instance)
+
+    override protected def saveImpl(path: String): Unit = {
+      val extraJson = ("apple" -> "pay") ~ ("orange" -> "load") ~ ("numClasses" -> instance.numClasses)
+      KNNModelParams.saveImpl(path, instance, sc, Some(extraJson))
+      //val modelPath = new Path(path, "model_0").toString
+      //instance.save(modelPath)
+    }
+  }
+
+  private class KNNClassificationModelReader extends MLReader[KNNClassificationModel] {
+    // Checked against metadata when loading model
+    private val className = classOf[KNNClassificationModel].getName
+
+    override def load(path: String): KNNClassificationModel = {
+      implicit val format = DefaultFormats
+      val metadata = KNNModelParams.loadImpl(path, sc, className)
+      val appleMetadata = (metadata.metadata \ "apple").extract[String]
+      val orangeMetadata =  (metadata.metadata \ "orange").extract[String]
+      val numClasses = (metadata.metadata \ "numClasses").extract[Int]
+      var modelPath = new Path(path, "topTree").toString
+      //val topTree = DefaultParamsReader.loadParamsInstance[Tree](modelPath, sc)
+      modelPath = new Path(path, "subTrees").toString
+      //val subTrees = DefaultParamsReader.loadParamsInstance[RDD[Tree]](modelPath, sc)
+      val knnClassificationModel = new KNNClassificationModel(metadata.uid, topTree, subTrees, numClasses)
+      //metadata.getAndSetParams(knnClassificationModel)
+      knnClassificationModel
+    }
+  }
+
 }
