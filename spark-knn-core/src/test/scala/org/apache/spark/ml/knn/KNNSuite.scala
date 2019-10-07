@@ -1,7 +1,7 @@
 package org.apache.spark.ml.knn
 
 import org.apache.spark.ml.PredictionModel
-import org.apache.spark.ml.classification.KNNClassifier
+import org.apache.spark.ml.classification.{KNNClassifier, KNNClassificationModel}
 import org.apache.spark.ml.feature.VectorAssembler
 import org.apache.spark.ml.knn.KNN.VectorWithNorm
 import org.apache.spark.ml.regression.KNNRegression
@@ -11,6 +11,8 @@ import org.apache.spark.sql.types._
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.log4j
 import org.scalatest.{FunSuite, Matchers}
+
+import org.apache.spark.sql.functions.{when, rand}
 
 import scala.collection.mutable
 
@@ -53,6 +55,36 @@ class KNNSuite extends FunSuite with Matchers  {
         new VectorWithNorm(vector).fastSquaredDistance(new VectorWithNorm(neighbor)) shouldBe 0.0
     }
   }
+
+  /** This requires an environment where I can run Spark and sbt.
+
+  test("Fitted knn classifier can be saved") {
+    val knn = new KNNClassifier()
+      .setTopTreeSize(data.size / 10)
+      .setTopTreeLeafSize(leafSize)
+      .setSubTreeLeafSize(leafSize)
+
+    val df = createDataFrame().withColumn("label", when(rand() > 0.5, 1.0).otherwise(0.0))
+    val model: KNNClassificationModel = knn.fit(df).setK(1)
+    val model_path = "file:///tmp/knn-save-attempt"
+    model.write.overwrite.save(model_path)
+
+    val recon = KNNClassificationModel.load(model_path)
+    val results = recon.transform(df).collect()
+    results.length shouldBe data.size
+
+    results.foreach {
+      row =>
+        val vector = row.getAs[Vector](3)
+        val neighbors = row.getAs[mutable.WrappedArray[Row]](4)
+        if (neighbors.isEmpty) {
+          logger.error(vector.toString)
+        }
+        neighbors.length shouldBe 1
+        val neighbor = neighbors.head.getAs[Vector](0)
+        new VectorWithNorm(vector).fastSquaredDistance(new VectorWithNorm(neighbor)) shouldBe 0.0
+    }
+  } */
 
   test("KNN fits correctly with maxDistance") {
     val knn = new KNN()
@@ -163,7 +195,7 @@ class KNNSuite extends FunSuite with Matchers  {
     checkKNN(knn.setWeightCol("z").fit)
   }
 
-  test("KNNParmas are copied correctly") {
+  test("KNNParams are copied correctly") {
     val knn = new KNNClassifier()
       .setTopTreeSize(data.size / 10)
       .setTopTreeLeafSize(leafSize)
