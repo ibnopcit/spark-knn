@@ -26,3 +26,5 @@ __pycache__/
 python/build/
 python/dist/
 *.egg-info/
+
+spark-knn.code-workspace

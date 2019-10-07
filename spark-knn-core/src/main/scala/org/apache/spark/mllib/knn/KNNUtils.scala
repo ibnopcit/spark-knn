@@ -17,4 +17,13 @@ object KNNUtils {
     MLUtils.fastSquaredDistance(v1, norm1, v2, norm2, precision)
   }
 
+  def getSparkClassLoader: ClassLoader = getClass.getClassLoader
+
+  def getContextOrSparkClassLoader: ClassLoader =
+    Option(Thread.currentThread().getContextClassLoader).getOrElse(getSparkClassLoader)
+
+  def classForName(className: String): Class[_] = {
+    Class.forName(className, true, getContextOrSparkClassLoader)
+  }
+
 }

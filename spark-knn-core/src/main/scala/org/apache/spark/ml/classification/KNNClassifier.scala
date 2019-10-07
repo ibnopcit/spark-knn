@@ -1,15 +1,21 @@
 package org.apache.spark.ml.classification
 
-import org.apache.hadoop.fs.{FileSystem, Path}
+import java.io._
 
+import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.log4j
+
+import org.apache.spark.ml.classification.KNNClassificationModel.KNNClassificationModelWriter
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.knn._
 import org.apache.spark.ml.knn.KNNModelParams
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.param.shared.HasWeightCol
-import org.apache.spark.ml.util.{DefaultParamsReadable, DefaultParamsWritable, Identifiable, SchemaUtils, MLReadable, MLWritable, MLReader, MLWriter}
+import org.apache.spark.ml.util.{Identifiable, SchemaUtils, MLReadable, MLWritable, MLReader, MLWriter}
 import org.apache.spark.ml.linalg._
 import org.apache.spark.ml.feature.LabeledPoint
+import org.apache.spark.persistence.knn._
+import org.apache.spark.persistence.knn.{FsagSerialization}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.types.{DoubleType, StructType}
 import org.apache.spark.sql.{DataFrame, Dataset, Row}
@@ -31,6 +37,8 @@ with KNNParams with HasWeightCol {
 
   def this() = this(Identifiable.randomUID("knnc"))
 
+  def fetchInputCols: Array[String] = $(inputCols)
+
   /** @group setParam */
   override def setFeaturesCol(value: String): this.type = set(featuresCol, value)
 
@@ -38,11 +46,13 @@ with KNNParams with HasWeightCol {
   override def setLabelCol(value: String): this.type = {
     set(labelCol, value)
 
+    var rval: this.type = null
     if ($(weightCol).isEmpty) {
-      set(inputCols, Array(value))
+      rval = set(inputCols, Array(value))
     } else {
-      set(inputCols, Array(value, $(weightCol)))
+      rval = set(inputCols, Array(value, $(weightCol)))
     }
+    rval
   }
 
   //fill in default label col
@@ -112,7 +122,8 @@ with KNNParams with HasWeightCol {
       throw new SparkException(msg)
     }
 
-    val knnModel = copyValues(new KNN()).fit(dataset)
+    // KNN object deals with inputCols field only, so set its components before copying.
+    val knnModel = copyValues(new KNN().setAuxCols($(inputCols))).fit(dataset)
     knnModel.toNewClassificationModel(uid, numClasses)
   }
 
@@ -134,8 +145,7 @@ class KNNClassificationModel private[ml](
                                           val subTrees: RDD[Tree],
                                           val _numClasses: Int
                                         ) extends ProbabilisticClassificationModel[Vector, KNNClassificationModel]
-with KNNModelParams with HasWeightCol with Serializable with MLReadable[KNNClassificationModel] with DefaultParamsReadable[KNNClassificationModel]
-with MLWritable with DefaultParamsWritable {
+with KNNModelParams with HasWeightCol with Serializable with MLWritable {
   require(subTrees.getStorageLevel != StorageLevel.NONE,
     "KNNModel is not designed to work with Trees that have not been cached")
 
@@ -147,7 +157,7 @@ with MLWritable with DefaultParamsWritable {
 
   override def numClasses: Int = _numClasses
 
-  //TODO: This can benefit from DataSet API
+  // TODO: This can benefit from DataSet API
   override def transform(dataset: Dataset[_]): DataFrame = {
     val getWeight: Row => Double = {
       if($(weightCol).isEmpty) {
@@ -244,42 +254,82 @@ with MLWritable with DefaultParamsWritable {
     throw new SparkException("predictRaw function should not be called directly since kNN prediction is done in distributed fashion. Use transform instead.")
   }
 
-  override def read: MLReader[KNNClassificationModel] = new KNNClassificationModelReader
-
   override def write: MLWriter = new KNNClassificationModelWriter(this)
 
-  override def load(path: String): KNNClassificationModel = super.load(path)
+}
 
-  /** [[MLWriter]] instance for [[KNNClassificationModel]]. */
-  private[KNNClassificationModel] class KNNClassificationModelWriter(instance: KNNClassificationModel) extends MLWriter {
-    // super[KNNModelParams].validateParams(instance)
+object KNNClassificationModel extends MLReadable[KNNClassificationModel] {
+  
+  private case class StData(tree: Tree)
+  private case class TtData(tree: Tree)
+
+  class KNNClassificationModelWriter(instance: KNNClassificationModel) extends MLWriter {
+
+    val logger = log4j.Logger.getLogger(getClass)
 
     override protected def saveImpl(path: String): Unit = {
-      val extraJson = ("apple" -> "pay") ~ ("orange" -> "load") ~ ("numClasses" -> instance.numClasses)
-      KNNModelParams.saveImpl(path, instance, sc, Some(extraJson))
-      //val modelPath = new Path(path, "model_0").toString
-      //instance.save(modelPath)
+      val extraMetadata = ("numClasses" -> instance.numClasses) ~ ("numSubTrees" -> instance.subTrees.count)
+      org.apache.spark.persistence.knn.DefaultParamsWriter.saveMetadata(instance, path, sc, Some(extraMetadata))
+      val ttData = TtData(instance.topTree.value)
+      val ttPath = new Path(path, "topTree").toString
+
+      FsagSerialization.fsagSerializeObject(instance.topTree.value, ttPath)
+
+      val c = instance.subTrees.count
+      val stPath = new Path(path, "subTrees").toString
+      val res = instance.subTrees.zipWithIndex().map { t => {
+        val i = t._2
+        val stPath = new Path(path, s"subTrees/$i").toString
+        FsagSerialization.fsagSerializeObject(t._1, stPath)
+        stPath
+      }}.collect
+      logger.info(s"I wrote subtrees ${res.}")
     }
   }
 
-  private class KNNClassificationModelReader extends MLReader[KNNClassificationModel] {
-    // Checked against metadata when loading model
+  private class KNNClassificationModelReader private[ml] extends MLReader[KNNClassificationModel] {
+
+    val logger = log4j.Logger.getLogger(getClass)
+
     private val className = classOf[KNNClassificationModel].getName
 
     override def load(path: String): KNNClassificationModel = {
+      val metadata = org.apache.spark.persistence.knn.DefaultParamsReader.loadMetadata(path, sc, className)
+
       implicit val format = DefaultFormats
-      val metadata = KNNModelParams.loadImpl(path, sc, className)
-      val appleMetadata = (metadata.metadata \ "apple").extract[String]
-      val orangeMetadata =  (metadata.metadata \ "orange").extract[String]
+
       val numClasses = (metadata.metadata \ "numClasses").extract[Int]
-      var modelPath = new Path(path, "topTree").toString
-      //val topTree = DefaultParamsReader.loadParamsInstance[Tree](modelPath, sc)
-      modelPath = new Path(path, "subTrees").toString
-      //val subTrees = DefaultParamsReader.loadParamsInstance[RDD[Tree]](modelPath, sc)
-      val knnClassificationModel = new KNNClassificationModel(metadata.uid, topTree, subTrees, numClasses)
-      //metadata.getAndSetParams(knnClassificationModel)
-      knnClassificationModel
+      val numSubTrees = (metadata.metadata \ "numSubTrees").extract[Int]
+
+      val ttPath = new Path(path, "topTree").toString
+      /* val topTree = sparkSession.read.parquet(tlDataPath)
+        .select("tree")
+        .head()
+        .getAs[Tree](0) */
+      val topTree: Tree = FsagSerialization.fsagDeserializeObject(ttPath).asInstanceOf[Tree]
+
+      var subTrees: RDD[Tree] = sc.emptyRDD
+      if (numSubTrees > 0) {
+        val stPath = new Path(path, "subTrees").toString
+        val stPaths = FsagSerialization.fsagLs(stPath)
+        val subTreesArr: Seq[Tree] = stPaths.map { case p: String =>
+          FsagSerialization.fsagDeserializeObject(p).asInstanceOf[Tree]
+        }
+        subTrees = sc.parallelize(subTreesArr).persist(StorageLevel.MEMORY_AND_DISK)
+      } else {
+        logger.error(s"No subtrees indicated in metadata. Corrupt save?")
+      }
+
+      val c = subTrees.count
+      logger.info(s"I made $c subtrees.")
+
+      val model = new KNNClassificationModel(metadata.uid, sc.broadcast(topTree), subTrees, numClasses)
+      org.apache.spark.persistence.knn.DefaultParamsReader.getAndSetParams(model, metadata)
+      model
     }
   }
 
+  override def read: MLReader[KNNClassificationModel] = new KNNClassificationModelReader
+
+  override def load(path: String): KNNClassificationModel = super.load(path)
 }

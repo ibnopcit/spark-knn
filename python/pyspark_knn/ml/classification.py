@@ -1,14 +1,16 @@
-from pyspark.ml.wrapper import JavaEstimator, JavaModel, JavaParams
-from pyspark.ml.util import DefaultParamsWritable, DefaultParamsReadable, JavaMLWriter, JavaMLReader, MLReadable, MLWritable
+from pyspark.ml.wrapper import JavaEstimator, JavaModel, JavaParams, JavaTransformer
+from pyspark.ml.util import JavaMLWriter, JavaMLReader, JavaMLWritable, JavaMLReadable
 from pyspark.ml.param.shared import *
 from pyspark.mllib.common import inherit_doc
 from pyspark import keyword_only
+
+from pyspark_knn.ml.java_reader import CustomJavaMLReader
 
 
 @inherit_doc
 class KNNClassifier(JavaEstimator, HasFeaturesCol, HasLabelCol, HasPredictionCol,
                     HasProbabilityCol, HasRawPredictionCol, HasInputCols,
-                    HasThresholds, HasSeed, HasWeightCol, MLReadable, MLWritable):
+                    HasThresholds, HasSeed, HasWeightCol):
     @keyword_only
     def __init__(self, featuresCol="features", labelCol="label", predictionCol="prediction",
                  seed=None, topTreeSize=1000, topTreeLeafSize=10, subTreeLeafSize=30, bufferSize=-1.0,
@@ -54,40 +56,60 @@ class KNNClassifier(JavaEstimator, HasFeaturesCol, HasLabelCol, HasPredictionCol
     def _create_model(self, java_model):
         return KNNClassificationModel(java_model)
 
+    def setLabelCol(self, to):
+        return self._set(labelCol=to)._call_java("setLabelCol", to)
 
-class KNNClassificationModel(JavaModel, DefaultParamsReadable, DefaultParamsWritable, MLReadable, MLWritable):
+    def setWeightCol(self, to):
+        return self._set(weight_col=to)._call_java("setWeightCol", to)
+        
+    @property
+    def inputCols(self):
+        """
+        """
+        return self._call_java("fetchInputCols")
+
+class KNNClassificationModel(JavaModel, JavaMLReadable, JavaMLWritable, HasFeaturesCol, HasLabelCol, HasPredictionCol,
+HasProbabilityCol, HasRawPredictionCol, HasInputCols, HasThresholds, HasWeightCol):
     """
     Model fitted by KNNClassifier.
     """
+
+    _classpath_model = 'org.apache.spark.ml.classification.KNNClassificationModel'
+
     def __init__(self, java_model):
         super(KNNClassificationModel, self).__init__(java_model)
 
         # note: look at https://issues.apache.org/jira/browse/SPARK-10931 in the future
-        self.bufferSize = Param(self, "bufferSize",
-                                "size of buffer used to construct spill trees and top-level tree search")
+        self.bufferSize = Param(self, "bufferSize", "size of buffer used to construct spill trees and top-level tree search")
         self.k = Param(self, "k", "number of neighbors to find")
         self.neighborsCol = Param(self, "neighborsCol", "column names for returned neighbors")
+        self.distanceCol = Param(self, "distanceCol", "column name for computed distances")
         self.maxNeighbors = Param(self, "maxNeighbors", "maximum distance to find neighbors")
+
+        self._resetUid(java_model.uid())
 
         self._transfer_params_from_java()
 
+    @property
+    def numClasses(self):
+        """
+        """
+        return self._call_java("numClasses")
+        
     @classmethod
-    def _from_java(cls, java_model):
+    def _from_java(cls, java_stage):
         """
         Given Java KNNClassificationModel, create and return Python wrapper. Necessary for persistence.
         """
-        py_model = cls(java_model)
-        py_model._transfer_params_from_java()
-        #py_model._resetUid(java_model.uid())
-        return py_model
+        py_type = KNNClassificationModel
+        py_stage = None
+        if issubclass(py_type, JavaParams):
+            # Load information from java_stage to the instance.
+            py_stage = py_type(java_stage)
 
-    def _to_java(self):
-        """
-        Transfer instance to a new Java object of same. Necessary for persistence.
-        :return: Java object equivalent to this instance.
-        """
-        _java_obj = JavaParams._new_java_obj("org.apache.spark.ml.classification.KNNClassificationModel", self.uid)
-        _java_obj.setFeaturesCol(self.featuresCol)
-        _java_obj.setLabelCol(self.labelCol)
-        _java_obj.setPredictionCol(self.predictionCol)
-        return _java_obj
+        return py_stage
+
+    @classmethod
+    def read(cls):
+        """Returns an MLReader instance for this class."""
+        return CustomJavaMLReader(cls, cls._classpath_model)

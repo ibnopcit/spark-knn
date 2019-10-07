@@ -96,7 +96,10 @@ private[ml] trait KNNModelParams extends Params with HasFeaturesCol with HasInpu
   /** @group getParam */
   def getBufferSize: Double = $(bufferSize)
 
+  setDefault(bufferSize -> -1.0, k -> 5, neighborsCol -> "neighbors", distanceCol -> "", maxDistance -> Double.PositiveInfinity)
+
   private[ml] def transform(data: RDD[Vector], topTree: Broadcast[Tree], subTrees: RDD[Tree]): RDD[(Long, Array[(Row,Double)])] = {
+    val stCount = subTrees.count()
     val searchData = data.zipWithIndex()
       .flatMap {
         case (vector, index) =>
@@ -108,6 +111,8 @@ private[ml] trait KNNModelParams extends Params with HasFeaturesCol with HasInpu
           idx
       }
       .partitionBy(new HashPartitioner(subTrees.partitions.length))
+
+    // println(s"partitioned search data into ${subTrees.partitions.length} partitions.")
 
     // for each partition, search points within corresponding child tree
     val results = searchData.zipPartitions(subTrees) {
@@ -130,25 +135,6 @@ private[ml] trait KNNModelParams extends Params with HasFeaturesCol with HasInpu
 
   private[ml] def transform(dataset: Dataset[_], topTree: Broadcast[Tree], subTrees: RDD[Tree]): RDD[(Long, Array[(Row, Double)])] = {
     transform(dataset.select($(featuresCol)).rdd.map(_.getAs[Vector](0)), topTree, subTrees)
-  }
-}
-
-object KNNModelParams {
-  def saveImpl(path: String, instance: KNNModelParams, sc: SparkContext, metametadata: Option[JObject] = None): Unit = {
-    val params = instance.extractParamMap().toSeq
-    val jsonParams = render(
-      params.filter { case ParamPair(p, v) => (p.name != "topTree" && p.name != "subTrees")}
-        .map { case ParamPair(p, v) => p.name -> parse(p.jsonEncode(v)) }
-        .toList
-    )
-
-    DefaultParamsWriter.saveMetadata(instance, path, sc, metametadata, Some(jsonParams))
-  }
-
-  def loadImpl(path: String, sc: SparkContext, expectedClassName: String): 
-    DefaultParamsReader.Metadata = {
-    val metadata = DefaultParamsReader.loadMetadata(path, sc, expectedClassName)
-    metadata
   }
 }
 

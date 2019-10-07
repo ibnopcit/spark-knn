@@ -12,15 +12,15 @@ sqlContext = SQLContext(sc)
 
 print('Initializing')
 training = sqlContext.createDataFrame([
-    [Vectors.dense([0.2, 0.9]), 0.0],
-    [Vectors.dense([0.2, 1.0]), 0.0],
-    [Vectors.dense([0.2, 0.1]), 1.0],
-    [Vectors.dense([0.2, 0.2]), 1.0],
+    [Vectors.sparse(3, [0, 2], [1.0, 3.0]), 0.0],
+    [Vectors.sparse(3, [0, 1], [-1.0, -2.0]), 1.0],
+    [Vectors.sparse(3, [2], [2.0]), 0.0],
+    [Vectors.sparse(3, [1, 2], [-1.0, 1.0]), 1.0],
 ], ['features', 'label'])
 
 test = sqlContext.createDataFrame([
-    [Vectors.dense([0.1, 0.0])],
-    [Vectors.dense([0.3, 0.8])]
+    [Vectors.sparse(3, [0, 1, 2], [0.6, 0.1, 0.9])],        # s/b 0.0
+    [Vectors.sparse(3, [0, 1, 2], [-0.3, -0.8, 0.2])]       # s/b 1.0
 ], ['features'])
 
 knn = KNNClassifier(k=1, topTreeSize=1, topTreeLeafSize=1, subTreeLeafSize=1, bufferSizeSampleSize=[1, 2, 3])  # bufferSize=-1.0,

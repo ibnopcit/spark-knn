@@ -14,6 +14,7 @@ import scala.collection.mutable
  * distance to the pivot vector. Finally it knows the number of leaves to help
  * determining partition index.
  */
+ @SerialVersionUID(1L)
 private[ml] abstract class Tree extends Serializable {
   val leftChild: Tree
   val rightChild: Tree
