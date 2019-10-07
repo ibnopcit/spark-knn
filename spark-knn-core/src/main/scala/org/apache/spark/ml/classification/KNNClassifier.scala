@@ -283,7 +283,7 @@ object KNNClassificationModel extends MLReadable[KNNClassificationModel] {
         FsagSerialization.fsagSerializeObject(t._1, stPath)
         stPath
       }}.collect
-      logger.info(s"I wrote subtrees ${res.}")
+      logger.info(s"I wrote subtrees $res.")
     }
   }
 
