@@ -8,7 +8,7 @@ from pyspark_knn.ml.java_reader import CustomJavaMLReader
 
 
 @inherit_doc
-class KNNClassifier(JavaEstimator, HasFeaturesCol, HasLabelCol, HasPredictionCol,
+class KNNClassifier(JavaEstimator, `Has`FeaturesCol, HasLabelCol, HasPredictionCol,
                     HasProbabilityCol, HasRawPredictionCol, HasInputCols,
                     HasThresholds, HasSeed, HasWeightCol):
     @keyword_only
@@ -16,7 +16,7 @@ class KNNClassifier(JavaEstimator, HasFeaturesCol, HasLabelCol, HasPredictionCol
                  seed=None, topTreeSize=1000, topTreeLeafSize=10, subTreeLeafSize=30, bufferSize=-1.0,
                  bufferSizeSampleSize=list(range(100, 1000 + 1, 100)), balanceThreshold=0.7,
                  k=5, neighborsCol="neighbors", maxNeighbors=float("inf"), rawPredictionCol="rawPrediction",
-                 probabilityCol="probability"):
+                 probabilityCol="probability", weightCol="weights"):
         super(KNNClassifier, self).__init__()
         self._java_obj = self._new_java_obj(
             "org.apache.spark.ml.classification.KNNClassifier", self.uid)
@@ -49,10 +49,12 @@ class KNNClassifier(JavaEstimator, HasFeaturesCol, HasLabelCol, HasPredictionCol
                   seed=None, topTreeSize=1000, topTreeLeafSize=10, subTreeLeafSize=30, bufferSize=-1.0,
                   bufferSizeSampleSize=list(range(100, 1000 + 1, 100)), balanceThreshold=0.7,
                   k=5, neighborsCol="neighbors", maxNeighbors=float("inf"), rawPredictionCol="rawPrediction",
-                  probabilityCol="probability"):
+                  probabilityCol="probability", weightCol=None):
         kwargs = self._input_kwargs
-        return self._set(**kwargs)
-
+        self._set(**kwargs)
+        if weightCol:
+            self.setWeightCol(weightCol)
+        return self.setLabelCol(labelCol)
     def _create_model(self, java_model):
         return KNNClassificationModel(java_model)
 
@@ -60,7 +62,7 @@ class KNNClassifier(JavaEstimator, HasFeaturesCol, HasLabelCol, HasPredictionCol
         return self._set(labelCol=to)._call_java("setLabelCol", to)
 
     def setWeightCol(self, to):
-        return self._set(weight_col=to)._call_java("setWeightCol", to)
+        return self._set(weightCol=to)._call_java("setWeightCol", to)
         
     @property
     def inputCols(self):

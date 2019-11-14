@@ -163,7 +163,8 @@ with KNNModelParams with HasWeightCol with Serializable with MLWritable {
       if($(weightCol).isEmpty) {
         r => 1.0
       } else {
-        r => r.getDouble(1)
+        // r => r.getDouble(1)
+        r => r.getAs[Double]($(weightCol))
       }
     }
 
@@ -171,9 +172,11 @@ with KNNModelParams with HasWeightCol with Serializable with MLWritable {
     val merged = neighborRDD
       .map {
         case (id, labelsDists) =>
+          // `labels` is a Seq[Row[class_id, ?]]
           val (labels, _) = labelsDists.unzip
           val vector = new Array[Double](numClasses)
           var i = 0
+          // N.B. No distance attenuation in this implementation.
           while (i < labels.length) {
             vector(labels(i).getDouble(0).toInt) += getWeight(labels(i))
             i += 1
@@ -312,12 +315,22 @@ object KNNClassificationModel extends MLReadable[KNNClassificationModel] {
       if (numSubTrees > 0) {
         val stPath = new Path(path, "subTrees").toString
         val stPaths = FsagSerialization.fsagLs(stPath)
-        val subTreesArr: Seq[Tree] = stPaths.map { case p: String =>
+        /*val subTreesArr: Seq[Tree] = stPaths.map { case p: String =>
           FsagSerialization.fsagDeserializeObject(p).asInstanceOf[Tree]
         }
-        subTrees = sc.parallelize(subTreesArr).persist(StorageLevel.MEMORY_AND_DISK)
+        subTrees = sc.parallelize(subTreesArr).persist(StorageLevel.MEMORY_AND_DISK)*/
+
+        val fnRdd = sc.parallelize(stPaths, numSubTrees)
+        subTrees = fnRdd.map( p => {
+          FsagSerialization.fsagDeserializeObject(p).asInstanceOf[Tree]
+        }).persist(StorageLevel.MEMORY_AND_DISK)
+        if (subTrees.isEmpty) {
+          logger.error(s"I tried to distribute $numSubTrees subtrees, but I got an empty RDD.")
+          throw new IOException("Error deserializing subtrees.")
+        }
       } else {
         logger.error(s"No subtrees indicated in metadata. Corrupt save?")
+        throw new IOException("No subtrees in model metadata.")
       }
 
       val c = subTrees.count
